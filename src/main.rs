@@ -1,5 +1,5 @@
 use anyhow::{anyhow, Result};
-use clap::Parser;
+use clap::{Parser, Subcommand};
 use subxt::{
     sp_core::{
         crypto::{AccountId32 as AccountId, Ss58Codec},
@@ -40,6 +40,9 @@ type Balance = u128;
 type BlockHash = H256;
 type BlockNumber = u32;
 
+type SubspaceRuntimeApi =
+    subspace::RuntimeApi<DefaultConfig, SubstrateExtrinsicParams<DefaultConfig>>;
+
 /// Subspace CLI.
 #[derive(Parser, Debug)]
 #[clap(author, version, about, long_about = None)]
@@ -55,6 +58,27 @@ struct SubspaceCli {
     /// Specify the block hash.
     #[clap(long)]
     pub block_hash: Option<BlockHash>,
+
+    #[clap(subcommand)]
+    command: Commands,
+}
+
+#[derive(Debug, Subcommand)]
+enum Commands {
+    /// Snapshot the state for the regenesis purpose.
+    Snapshot,
+    /// System.
+    #[clap(subcommand)]
+    System(SystemCommands),
+}
+
+#[derive(Debug, Subcommand)]
+enum SystemCommands {
+    /// Account info.
+    Account {
+        #[clap(long, parse(try_from_str))]
+        who: AccountId,
+    },
 }
 
 #[tokio::main]
@@ -65,7 +89,7 @@ async fn main() -> Result<()> {
         .set_url(cli.url)
         .build()
         .await?
-        .to_runtime_api::<subspace::RuntimeApi<DefaultConfig, SubstrateExtrinsicParams<DefaultConfig>>>();
+        .to_runtime_api::<SubspaceRuntimeApi>();
 
     let maybe_block_hash = if let Some(block_number) = cli.block_number {
         Some(
@@ -92,6 +116,20 @@ async fn main() -> Result<()> {
             .expect("Best block hash not found"),
     };
 
+    match cli.command {
+        Commands::Snapshot => snapshot(&api, block_hash).await?,
+        Commands::System(system_commands) => match system_commands {
+            SystemCommands::Account { who } => {
+                let account = api.storage().system().account(&who, Some(block_hash)).await;
+                println!("{:#?}", account);
+            }
+        },
+    }
+
+    Ok(())
+}
+
+async fn snapshot(api: &SubspaceRuntimeApi, block_hash: BlockHash) -> Result<()> {
     let endowed = vec![
         AccountId::from_ss58check("5CXTmJEusve5ixyJufqHThmy4qUrrm6FyLCR7QfE4bbyMTNC")
             .expect("Sudo account must be valid; qed"),
