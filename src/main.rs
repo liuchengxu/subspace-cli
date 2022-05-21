@@ -2,6 +2,7 @@ mod commands;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand};
+use codec::Decode;
 use subxt::{
     sp_core::{crypto::AccountId32 as AccountId, H256},
     ClientBuilder, DefaultConfig, SubstrateExtrinsicParams,
@@ -52,6 +53,10 @@ enum SystemCommands {
         #[clap(long, parse(try_from_str))]
         who: AccountId,
     },
+    /// Events.
+    Events,
+    /// `BlockHash` mapping.
+    BlockHash,
 }
 
 #[tokio::main]
@@ -70,10 +75,9 @@ async fn main() -> Result<()> {
                 .rpc()
                 .block_hash(Some(block_number.into()))
                 .await?
-                .expect(&format!(
-                    "Block hash for block number {} not found",
-                    block_number
-                )),
+                .unwrap_or_else(|| {
+                    panic!("Block hash for block number {} not found", block_number)
+                }),
         )
     } else {
         cli.block_hash
@@ -95,6 +99,28 @@ async fn main() -> Result<()> {
             SystemCommands::Account { who } => {
                 let account = api.storage().system().account(&who, Some(block_hash)).await;
                 println!("{:#?}", account);
+            }
+            SystemCommands::Events => {
+                let events = api.storage().system().events(Some(block_hash)).await;
+                println!("{:#?}", events);
+            }
+            SystemCommands::BlockHash => {
+                const TWOX_HASH_LEN: usize = 16; // 8 bytes hex
+                const STORAGE_PREFIX_LEN: usize = 64; // 32 bytes hex
+
+                let mut iter = api
+                    .storage()
+                    .system()
+                    .block_hash_iter(Some(block_hash))
+                    .await?;
+
+                while let Some((key, hash)) = iter.next().await? {
+                    let key = hex::encode(&key.0);
+                    let number: u32 = Decode::decode(
+                        &mut hex::decode(&key[STORAGE_PREFIX_LEN + TWOX_HASH_LEN..])?.as_slice(),
+                    )?;
+                    println!("{}: {}", number, hash);
+                }
             }
         },
     }
